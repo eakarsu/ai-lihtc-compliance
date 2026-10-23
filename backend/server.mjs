@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { mountTasks } from './tasks.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +9,7 @@ import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import pg from 'pg';
 import { mountOperationalRecordActions, recordPermissions } from './operationalRecordActions.mjs';
+import { mountWave59a, filterCases } from './wave59a.mjs';
 
 const backendRoot = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.dirname(backendRoot);
@@ -228,7 +230,7 @@ export function createApp() {
     try { await pool.query('SELECT 1'); res.json({ status: 'ok', app: config.id, title: config.title, tagline: config.tagline, accent: config.accent, database: 'postgresql', ai: aiStatus() }); }
     catch { res.status(503).json({ status: 'error', error: 'PostgreSQL is unavailable' }); }
   });
-  app.get('/api/auth/demo-credentials', (_req, res) => res.json({ email: process.env.DEMO_EMAIL || 'runtime-admin@example.com', password: process.env.DEMO_PASSWORD || 'LocalDemo!2026' }));
+  app.get('/api/auth/demo-credentials',(_req,res)=>res.status(404).json({error:'Credential discovery is disabled'}));
   app.post('/api/auth/login', async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const result = await pool.query('SELECT id,email,name,role,password_hash FROM app_users WHERE email=$1', [email]);
@@ -239,6 +241,8 @@ export function createApp() {
   });
   app.use('/api', auth);
   mountOperationalRecordActions(app, { pool, config, identifier, audit });
+  mountTasks(app, { pool, audit });
+  mountWave59a(app, { pool });
   app.get('/api/app', (req, res) => res.json({ ...config, user: req.user, ai: aiStatus() , recordPermissions: recordPermissions(req.user) }));
   app.get('/api/dashboard', async (_req, res) => {
     const [records, attention, recent, analyses] = await Promise.all([
@@ -297,7 +301,8 @@ export function createApp() {
   app.get('/api/workflows', (_req, res) => res.json({ items: config.workflows }));
   app.get('/api/records', async (req, res) => {
     const result = req.query.workflow ? await pool.query('SELECT * FROM workflow_cases WHERE workflow_id=$1 ORDER BY due_date', [req.query.workflow]) : await pool.query('SELECT * FROM workflow_cases ORDER BY due_date');
-    res.json({ items: result.rows });
+    const filtered = filterCases(result.rows, req.query || {});
+    res.json({ items: filtered, total: filtered.length });
   });
   app.get('/api/operations', (_req, res) => res.json({ items: config.operations }));
   app.get('/api/operation-records', async (req, res) => {
